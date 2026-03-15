@@ -1,0 +1,25 @@
+{
+  "name": "mini-openclaw",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A small local-first gateway runtime inspired by OpenClaw.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.mjs",
+    "test:watch": "vitest --config vitest.config.mjs",
+    "gateway:ws": "tsx src/cli/dev-server.ts",
+    "cli:run": "tsx src/cli/agent-run.ts",
+    "ui:web": "tsx src/cli/web-ui-server.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

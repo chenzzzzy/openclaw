@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mini OpenClaw Web Chat</title>
+    <style>
+      :root {
+        --bg: #f7f7f2;
+        --panel: #ffffff;
+        --line: #d9d8cd;
+        --text: #1f2a30;
+        --muted: #60727c;
+        --accent: #1f7a8c;
+        --user: #e7f7fb;
+        --agent: #f5f2e8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "PingFang SC", sans-serif;
+        background: radial-gradient(circle at top, #ffffff, var(--bg));
+        color: var(--text);
+      }
+      .app {
+        max-width: 920px;
+        margin: 20px auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .topbar {
+        padding: 12px;
+        border-bottom: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: 1fr 1fr auto auto;
+        gap: 8px;
+      }
+      input,
+      button,
+      textarea {
+        font: inherit;
+      }
+      input,
+      textarea {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        padding: 10px 14px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      .status {
+        padding: 8px 12px;
+        color: var(--muted);
+        font-size: 13px;
+        border-bottom: 1px solid var(--line);
+      }
+      .messages {
+        min-height: 420px;
+        max-height: 62vh;
+        overflow: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .msg {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        white-space: pre-wrap;
+      }
+      .msg.user {
+        background: var(--user);
+      }
+      .msg.agent {
+        background: var(--agent);
+      }
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 12px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+      .hint {
+        padding: 0 12px 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="topbar">
+        <input id="wsUrl" value="ws://127.0.0.1:18789" />
+        <input id="sessionKey" value="agent:main:main" />
+        <button id="connectBtn">连接</button>
+        <button id="disconnectBtn" disabled>断开</button>
+      </div>
+      <div class="status" id="status">未连接</div>
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <textarea id="input" rows="3" placeholder="输入消息，回车发送，Shift+Enter 换行"></textarea>
+        <button id="sendBtn" disabled>发送</button>
+      </div>
+      <div class="hint">
+        流式显示依赖 `agent.delta` 事件；本页会在 `agent.finished` 收尾。
+      </div>
+    </div>
+
+    <script>
+      const wsUrlEl = document.getElementById("wsUrl");
+      const sessionKeyEl = document.getElementById("sessionKey");
+      const connectBtn = document.getElementById("connectBtn");
+      const disconnectBtn = document.getElementById("disconnectBtn");
+      const sendBtn = document.getElementById("sendBtn");
+      const inputEl = document.getElementById("input");
+      const statusEl = document.getElementById("status");
+      const messagesEl = document.getElementById("messages");
+
+      let ws = null;
+      const pendingByReq = new Map();
+      const pendingEventsByRun = new Map();
+      const runToState = new Map();
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function addMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `msg ${role}`;
+        div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function applyEventToState(event, state) {
+        if (event.event === "agent.delta") {
+          state.hasDelta = true;
+          state.node.textContent += event.payload.text;
+        }
+        if (event.event === "agent.finished") {
+          if (!state.hasDelta) {
+            state.node.textContent = event.payload.text;
+          }
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      connectBtn.onclick = () => {
+        if (ws) return;
+        ws = new WebSocket(wsUrlEl.value.trim());
+        setStatus("连接中...");
+
+        ws.onopen = () => {
+          setStatus("已连接");
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+          sendBtn.disabled = false;
+        };
+
+        ws.onclose = () => {
+          setStatus("已断开");
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          sendBtn.disabled = true;
+          ws = null;
+        };
+
+        ws.onerror = () => {
+          setStatus("连接错误");
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "res") {
+            const state = pendingByReq.get(msg.id);
+            if (!state) return;
+            if (!msg.ok) {
+              state.node.textContent = `请求失败: ${msg.error?.message || "unknown"}`;
+              pendingByReq.delete(msg.id);
+              return;
+            }
+            pendingByReq.delete(msg.id);
+            const runId = msg.payload.runId;
+            runToState.set(runId, state);
+            const early = pendingEventsByRun.get(runId) || [];
+            early.forEach((event) => applyEventToState(event, state));
+            pendingEventsByRun.delete(runId);
+            return;
+          }
+
+          if (msg.type === "event") {
+            const runId = msg.payload.runId;
+            const state = runToState.get(runId);
+            if (!state) {
+              const list = pendingEventsByRun.get(runId) || [];
+              list.push(msg);
+              pendingEventsByRun.set(runId, list);
+              return;
+            }
+            applyEventToState(msg, state);
+          }
+        };
+      };
+
+      disconnectBtn.onclick = () => {
+        if (ws) ws.close();
+      };
+
+      function sendCurrentMessage() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const text = inputEl.value.trim();
+        if (!text) return;
+
+        addMessage("user", text);
+        const agentNode = addMessage("agent", "");
+        const reqId = (crypto.randomUUID && crypto.randomUUID()) || `req-${Date.now()}`;
+        pendingByReq.set(reqId, { node: agentNode, hasDelta: false });
+
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id: reqId,
+            method: "agent.run",
+            params: {
+              sessionKey: sessionKeyEl.value.trim(),
+              message: text,
+            },
+          }),
+        );
+
+        inputEl.value = "";
+        inputEl.focus();
+      }
+
+      sendBtn.onclick = sendCurrentMessage;
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendCurrentMessage();
+        }
+      });
+    </script>
+  </body>
+</html>

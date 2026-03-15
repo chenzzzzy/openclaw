@@ -76,7 +76,30 @@ export function resolveContextWindowTokens(params: {
   defaultTokens: number;
 }): ContextWindowInfo {
   // TODO: 实现此函数
-  throw new Error("Not implemented");
+  let baseInfo: ContextWindowInfo;
+
+  function isValidPositiveInt(value:unknown):value is number {
+    return (
+        typeof value === "number" &&
+            Number.isFinite(value) &&
+            Math.floor(value) > 0
+    );
+  }
+  // 优先级 modelsConfig > modelApi > defaultTokens
+  if (isValidPositiveInt(params.modelsConfig)) {
+    baseInfo = {tokens: params.modelsConfig, source: "modelsConfig"};
+  }else if (isValidPositiveInt(params.modelApi)){
+    baseInfo = { tokens: params.modelApi, source: "modelApi" };
+  }else {
+    baseInfo = {tokens:Math.floor(params.defaultTokens), source: "default"}
+  }
+
+  // 步骤2：管理员上限检查（只有 adminCap < 基准值时才生效）
+  if (isValidPositiveInt(params.adminCap) && params.adminCap < baseInfo.tokens) {
+    return { tokens: params.adminCap, source: "adminCap" };
+  }
+
+  return baseInfo;
 }
 
 // ============================================================
@@ -103,8 +126,12 @@ export function evaluateContextBudget(
   contextTokens: number,
   usedTokens: number,
 ): ContextBudgetResult {
-  // TODO: 实现此函数
-  throw new Error("Not implemented");
+  const remainingTokens = contextTokens - usedTokens;
+  return {
+    remainingTokens,
+    shouldWarn: remainingTokens < WARN_BELOW_TOKENS, // 警告
+    shouldBlock: remainingTokens < HARD_MIN_TOKENS, // 阻止
+  };
 }
 
 // ============================================================

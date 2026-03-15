@@ -1,0 +1,5 @@
+node_modules/
+dist/
+_tmp_*
+.vite/
+config/llm.local.json
